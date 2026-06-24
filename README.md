@@ -18,7 +18,7 @@
 | **工具链** | GNU Tools for STM32（`arm-none-eabi-gcc`） |
 | **构建系统** | CMake + Ninja |
 | **IDE** | STM32CubeIDE for VS Code Extension |
-| **调试/烧录器** | ST-Link V2（克隆版可用） |
+| **调试/烧录器** | ST-Link V2（克隆版可用） / J-Link OB |
 
 ---
 
@@ -88,6 +88,8 @@ first_code_STM32/
  └──────────┘        └──────────┘
 ```
 
+> 📌 **ST-Link / J-Link 接线完全相同**，都是 SWD 标准接口，4 根线即可。
+>
 > 如果用**串口 ISP** 烧录（USB-TTL 模块）：TX → PA10(RX)，RX → PA9(TX)，GND → GND。
 > 烧录前 BOOT0 接 3.3V（BOOT1 接 GND），烧完恢复 BOOT0 接 GND。
 
@@ -109,6 +111,10 @@ brew install arm-none-eabi-gcc
 # 开源 ST-Link 烧录工具（完美兼容克隆版）
 brew install stlink
 
+# J-Link 工具（随 STM32CubeIDE VS Code 扩展自带）
+# 路径：~/Library/Application Support/stm32cube/bundles/jlink-gdbserver/*/bin/
+# 无需额外安装，建议加入 PATH（见下文）
+
 # GitHub CLI（可选，提交代码用）
 brew install gh
 ```
@@ -119,6 +125,7 @@ brew install gh
 |------|------|
 | STM32CubeIDE Build CMake | 1.45.0 |
 | STM32CubeIDE Core | 1.3.0 |
+| SEGGER J-Link | 9.24（随扩展自带） |
 | stlink | 1.8.0 |
 | arm-none-eabi-gcc | Homebrew latest |
 
@@ -128,6 +135,11 @@ brew install gh
 arm-none-eabi-gcc --version
 st-info --version
 cube-cmake --version
+
+# J-Link（安装 STM32CubeIDE 扩展后可用）
+JLinkExe -NoGui 1 -Exit 2>/dev/null
+# 如果找不到 JLinkExe，先加入 PATH：
+# export PATH="$HOME/Library/Application Support/stm32cube/bundles/jlink-gdbserver/9.24.0+st.1/bin:$PATH"
 ```
 
 ---
@@ -151,7 +163,7 @@ cube-cmake --build build/Debug
 | 文件 | 格式 | 大小（参考） | 用途 |
 |------|------|------|------|
 | `first_code_STM32.elf` | ELF | ~30 KB | 含调试符号，**debug 用** |
-| `first_code_STM32.bin` | 纯二进制 | ~932 B | **ST-Link 烧录用** |
+| `first_code_STM32.bin` | 纯二进制 | ~932 B | **ST-Link / J-Link 烧录用** |
 | `first_code_STM32.hex` | Intel HEX | ~2.6 KB | **串口 ISP 烧录用** |
 | `first_code_STM32.map` | 文本 | ~103 KB | 内存布局报告 |
 
@@ -201,7 +213,81 @@ st-info --probe
 #   dev-type:   STM32F1xx_MD
 ```
 
-### 6.2 方式二：串口 ISP（USB-TTL 模块）
+### 6.2 方式二：J-Link（SWD 模式，J-Link OB / J-Link Edu / J-Link Pro 均适用）
+
+**硬件接线：**
+
+```
+   J-Link (20-pin 接口)     Blue Pill
+  ┌──────────────┐        ┌──────────┐
+  │ 1  VTref ────┼───────►│ 3.3V     │  ← 参考电压（必须接）
+  │ 7  SWDIO ────┼───────►│ SWIO     │
+  │ 9  SWCLK ────┼───────►│ SWCLK    │
+  │ 4  GND   ────┼───────►│ GND      │
+  └──────────────┘        └──────────┘
+```
+
+> 如果用的是 J-Link OB（板载调试器，如 Blue Pill 兼容板自带），通常直接引出 4 个 SWD 排针，无需 20-pin 转接板。
+
+**工具路径：**
+
+J-Link 工具随 STM32CubeIDE VS Code 扩展打包，无需单独安装。首次使用建议加入 PATH：
+
+```bash
+# 查看已安装的 J-Link 版本
+ls ~/Library/Application\ Support/stm32cube/bundles/jlink-gdbserver/
+
+# 加入 PATH（将版本号替换为实际路径）
+echo 'export PATH="$HOME/Library/Application Support/stm32cube/bundles/jlink-gdbserver/9.24.0+st.1/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+**烧录命令：**
+
+```bash
+# 一键烧录（非交互式）
+JLinkExe -device STM32F103C8 -if SWD -speed 4000 -autoconnect 1 \
+  -CommanderScript <(echo -e "loadfile build/Debug/first_code_STM32.bin 0x08000000\nr\ng\nexit")
+```
+
+或者交互式烧录（方便调试）：
+
+```bash
+JLinkExe -device STM32F103C8 -if SWD -speed 4000
+```
+
+进入 J-Link 命令行后：
+
+```
+J-Link> connect                              # 连接目标芯片
+J-Link> loadfile build/Debug/first_code_STM32.bin 0x08000000
+J-Link> r                                    # 复位
+J-Link> g                                    # 运行
+J-Link> exit
+```
+
+> `0x08000000` 是 STM32F103 Flash 的起始地址；`-if SWD` 指定 SWD 接口（比 JTAG 少 3 根线）；`-speed 4000` 为 SWD 时钟 4 MHz。
+
+**烧录输出示例（验证通过）：**
+
+```
+J-Link Commander V9.24
+Connecting to J-Link via USB...O.K.
+Firmware: J-Link ARM-OB STM32 compiled Aug 22 2012 19:52:04
+Hardware version: V7.00
+VTref=3.300V
+Device "STM32F103C8" selected.
+Connecting to target via SWD
+Found SW-DP with ID 0x1BA01477
+Cortex-M3 identified.
+Downloading file [first_code_STM32.bin]...
+J-Link: Flash download: Bank 0 @ 0x08000000: Skipped. Contents already match
+O.K.
+```
+
+> `Skipped. Contents already match` — J-Link 智能比对，固件未变化时跳过擦写。正常现象，首次烧录或代码修改后会显示实际写入字节数。
+
+### 6.3 方式三：串口 ISP（USB-TTL 模块）
 
 ```bash
 # 1. 接线：TX → PA10, RX → PA9, GND → GND
@@ -211,10 +297,16 @@ stm32flash -w build/Debug/first_code_STM32.hex -v -g 0x0 /dev/tty.usbserial-*
 # 3. 烧完断开 BOOT0（接回 GND），按复位或重上电
 ```
 
-### 6.3 一键编译 + 烧录
+### 6.4 一键编译 + 烧录
 
 ```bash
+# 使用 ST-Link
 cube-cmake --build build/Debug && st-flash write build/Debug/first_code_STM32.bin 0x08000000
+
+# 使用 J-Link
+cube-cmake --build build/Debug && \
+  JLinkExe -device STM32F103C8 -if SWD -speed 4000 -autoconnect 1 \
+    -CommanderScript <(echo -e "loadfile build/Debug/first_code_STM32.bin 0x08000000\nr\ng\nexit")
 ```
 
 ---
